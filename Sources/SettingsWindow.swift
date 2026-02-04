@@ -260,6 +260,7 @@ extension WarningMode {
 
 struct SettingsView: View {
     let appDelegate: AppDelegate
+    let settingsProfileManager: SettingsProfileManager
 
     // Local state that syncs with AppDelegate - initialized from appDelegate in init()
     @State private var intensity: Double
@@ -298,6 +299,12 @@ struct SettingsView: View {
 
     init(appDelegate: AppDelegate) {
         self.appDelegate = appDelegate
+        self.settingsProfileManager = appDelegate.settingsProfileManager
+    }
+
+    init(appDelegate: AppDelegate, settingsProfileManager: SettingsProfileManager) {
+        self.appDelegate = appDelegate
+        self.settingsProfileManager = settingsProfileManager
 
         // Initialize all state from appDelegate synchronously to ensure correct sizing
         let cameras = appDelegate.cameraDetector.getAvailableCameras()
@@ -329,8 +336,8 @@ struct SettingsView: View {
         _detectionModeSlider = State(initialValue: Double(detectionModes.firstIndex(of: profileDetectionMode) ?? 0))
         _trackingSource = State(initialValue: appDelegate.trackingSource)
         _airPodsAvailable = State(initialValue: appDelegate.airPodsDetector.isAvailable)
-        appDelegate.settingsProfileManager.ensureProfilesLoaded()
-        let snapshot = appDelegate.settingsProfileManager.profilesSnapshot()
+        settingsProfileManager.ensureProfilesLoaded()
+        let snapshot = settingsProfileManager.profilesState()
         let profiles = snapshot.profiles
         let initialProfileID = snapshot.selectedID ?? profiles.first?.id ?? ""
         _settingsProfiles = State(initialValue: profiles)
@@ -515,7 +522,7 @@ struct SettingsView: View {
                     CompactWarningStylePicker(selection: $warningMode)
                         .frame(maxWidth: .infinity)
                         .onChange(of: warningMode) { newValue in
-                            appDelegate.settingsProfileManager.updateActiveProfile(warningMode: newValue)
+                            settingsProfileManager.updateActiveProfile(warningMode: newValue)
                             appDelegate.switchWarningMode(to: newValue)
                         }
 
@@ -525,7 +532,7 @@ struct SettingsView: View {
                         .frame(width: 28, height: 22)
                         .onChange(of: warningColor) { newValue in
                             let nsColor = NSColor(newValue)
-                            appDelegate.settingsProfileManager.updateActiveProfile(warningColor: nsColor)
+                            settingsProfileManager.updateActiveProfile(warningColor: nsColor)
                             appDelegate.updateWarningColor(nsColor)
                         }
                 }
@@ -548,7 +555,7 @@ struct SettingsView: View {
                 .onChange(of: deadZoneSlider) { newValue in
                     let index = Int(newValue)
                     deadZone = deadZoneValues[index]
-                    appDelegate.settingsProfileManager.updateActiveProfile(deadZone: deadZone)
+                    settingsProfileManager.updateActiveProfile(deadZone: deadZone)
                     appDelegate.applyActiveSettingsProfile()
                 }
 
@@ -563,7 +570,7 @@ struct SettingsView: View {
                 .onChange(of: intensitySlider) { newValue in
                     let index = Int(newValue)
                     intensity = intensityValues[index]
-                    appDelegate.settingsProfileManager.updateActiveProfile(intensity: intensity)
+                    settingsProfileManager.updateActiveProfile(intensity: intensity)
                     appDelegate.applyActiveSettingsProfile()
                 }
 
@@ -576,7 +583,7 @@ struct SettingsView: View {
                     valueLabel: "\(Int(warningOnsetDelay))s"
                 )
                 .onChange(of: warningOnsetDelay) { newValue in
-                    appDelegate.settingsProfileManager.updateActiveProfile(warningOnsetDelay: newValue)
+                    settingsProfileManager.updateActiveProfile(warningOnsetDelay: newValue)
                     appDelegate.applyActiveSettingsProfile()
                 }
 
@@ -590,7 +597,7 @@ struct SettingsView: View {
                 )
                 .onChange(of: detectionModeSlider) { newValue in
                     let index = Int(newValue)
-                    appDelegate.settingsProfileManager.updateActiveProfile(detectionMode: detectionModes[index])
+                    settingsProfileManager.updateActiveProfile(detectionMode: detectionModes[index])
                     appDelegate.applyActiveSettingsProfile()
                 }
             }
@@ -712,7 +719,7 @@ struct SettingsView: View {
             Button("Create") {
                 let trimmedName = newProfileName.trimmingCharacters(in: .whitespacesAndNewlines)
                 let profileName = trimmedName.isEmpty ? nextDefaultProfileName() : trimmedName
-                let profile = appDelegate.settingsProfileManager.createProfile(
+                let profile = settingsProfileManager.createProfile(
                     named: profileName,
                     warningMode: appDelegate.activeWarningMode,
                     warningColor: appDelegate.activeWarningColor,
@@ -721,7 +728,7 @@ struct SettingsView: View {
                     warningOnsetDelay: appDelegate.activeWarningOnsetDelay,
                     detectionMode: appDelegate.activeDetectionMode
                 )
-                settingsProfiles = appDelegate.settingsProfileManager.settingsProfiles
+                settingsProfiles = settingsProfileManager.settingsProfiles
                 selectedSettingsProfileID = profile.id
                 lastSelectedSettingsProfileID = profile.id
                 syncProfileSettings()
@@ -748,9 +755,9 @@ struct SettingsView: View {
         isApplyingProfileSelection = true
         defer { isApplyingProfileSelection = false }
         let previousSelection = lastSelectedSettingsProfileID
-        if let profile = appDelegate.settingsProfileManager.selectProfile(id: newValue) {
+        if let profile = settingsProfileManager.selectProfile(id: newValue) {
             appDelegate.applyActiveSettingsProfile()
-            settingsProfiles = appDelegate.settingsProfileManager.settingsProfiles
+            settingsProfiles = settingsProfileManager.settingsProfiles
             selectedSettingsProfileID = profile.id
             lastSelectedSettingsProfileID = profile.id
         } else {

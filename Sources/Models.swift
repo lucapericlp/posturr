@@ -326,7 +326,7 @@ final class SettingsProfileManager {
         }
     }
 
-    func profilesSnapshot() -> (profiles: [SettingsProfile], selectedID: String?) {
+    func profilesState() -> (profiles: [SettingsProfile], selectedID: String?) {
         (settingsProfiles, currentSettingsProfileID)
     }
 
