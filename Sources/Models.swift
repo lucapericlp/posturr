@@ -109,7 +109,7 @@ enum WarningDefaults {
 
 // MARK: - Warning Mode
 
-enum WarningMode: String, CaseIterable {
+enum WarningMode: String, CaseIterable, Codable {
     case blur = "blur"
     case vignette = "vignette"
     case border = "border"
@@ -128,7 +128,7 @@ enum WarningMode: String, CaseIterable {
 
 // MARK: - Detection Mode
 
-enum DetectionMode: String, CaseIterable {
+enum DetectionMode: String, CaseIterable, Codable {
     case responsive = "responsive"  // 10 fps - best accuracy (default)
     case balanced = "balanced"      // 4 fps - good balance
     case performance = "performance" // 2 fps - best battery life
@@ -160,6 +160,8 @@ enum SettingsKeys {
     static let pauseOnTheGo = "pauseOnTheGo"
     static let lastCameraID = "lastCameraID"
     static let profiles = "profiles"
+    static let settingsProfiles = "settingsProfiles"
+    static let currentSettingsProfileID = "currentSettingsProfileID"
     static let warningMode = "warningMode"
     static let warningColor = "warningColor"
     static let warningOnsetDelay = "blurOnsetDelay"  // Keep key for backward compatibility
@@ -223,6 +225,29 @@ struct ProfileData: Codable {
     let neutralY: CGFloat
     let postureRange: CGFloat
     let cameraID: String
+}
+
+// MARK: - Settings Profile
+struct SettingsProfile: Codable, Identifiable, Equatable {
+    let id: String
+    var name: String
+    var warningMode: WarningMode
+    var warningColorData: Data
+    var deadZone: Double
+    var intensity: Double
+    var warningOnsetDelay: Double
+    var detectionMode: DetectionMode
+
+    var warningColor: NSColor {
+        if let color = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NSColor.self, from: warningColorData) {
+            return color
+        }
+        return WarningDefaults.color
+    }
+
+    static func encodedColorData(from color: NSColor) -> Data {
+        (try? NSKeyedArchiver.archivedData(withRootObject: color, requiringSecureCoding: false)) ?? Data()
+    }
 }
 
 // MARK: - Pause Reason

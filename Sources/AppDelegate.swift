@@ -39,6 +39,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     var warningOverlayManager = WarningOverlayManager()
     var warningMode: WarningMode = .blur
     var warningColor: NSColor = WarningDefaults.color
+    var settingsProfiles: [SettingsProfile] = []
+    var currentSettingsProfileID: String?
+    var isApplyingSettingsProfile = false
+    private let defaultIntensity: Double = 1.0
+    private let defaultDeadZone: Double = 0.03
+    private let defaultWarningOnsetDelay: Double = 0.0
 
     // MARK: - Posture Detectors
 
@@ -693,6 +699,86 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         cameraDetector.baseFrameInterval = 1.0 / detectionMode.frameRate
     }
 
+    func applySettingsProfile(_ profile: SettingsProfile) {
+        isApplyingSettingsProfile = true
+        defer { isApplyingSettingsProfile = false }
+        warningMode = profile.warningMode
+        warningColor = profile.warningColor
+        deadZone = profile.deadZone
+        intensity = profile.intensity
+        warningOnsetDelay = profile.warningOnsetDelay
+        detectionMode = profile.detectionMode
+        postureConfig.intensity = intensity
+        postureConfig.warningOnsetDelay = warningOnsetDelay
+        activeDetector.updateParameters(intensity: intensity, deadZone: deadZone)
+        if setupComplete {
+            switchWarningMode(to: warningMode)
+            updateWarningColor(warningColor)
+        }
+        applyDetectionMode()
+    }
+
+    func updateSettingsProfile(
+        warningMode: WarningMode? = nil,
+        warningColor: NSColor? = nil,
+        deadZone: Double? = nil,
+        intensity: Double? = nil,
+        warningOnsetDelay: Double? = nil,
+        detectionMode: DetectionMode? = nil
+    ) {
+        guard !isApplyingSettingsProfile else { return }
+        guard let profileID = currentSettingsProfileID,
+              let index = settingsProfiles.firstIndex(where: { $0.id == profileID }) else {
+            return
+        }
+        var profile = settingsProfiles[index]
+        if let warningMode = warningMode {
+            profile.warningMode = warningMode
+        }
+        if let warningColor = warningColor {
+            profile.warningColorData = SettingsProfile.encodedColorData(from: warningColor)
+        }
+        if let deadZone = deadZone {
+            profile.deadZone = deadZone
+        }
+        if let intensity = intensity {
+            profile.intensity = intensity
+        }
+        if let warningOnsetDelay = warningOnsetDelay {
+            profile.warningOnsetDelay = warningOnsetDelay
+        }
+        if let detectionMode = detectionMode {
+            profile.detectionMode = detectionMode
+        }
+        settingsProfiles[index] = profile
+        saveSettingsProfiles()
+    }
+
+    func selectSettingsProfile(id: String) {
+        guard let profile = settingsProfiles.first(where: { $0.id == id }) else { return }
+        currentSettingsProfileID = id
+        applySettingsProfile(profile)
+        saveSettings()
+        saveSettingsProfiles()
+    }
+
+    func createSettingsProfile(named name: String) -> SettingsProfile {
+        let profile = SettingsProfile(
+            id: UUID().uuidString,
+            name: name,
+            warningMode: warningMode,
+            warningColorData: SettingsProfile.encodedColorData(from: warningColor),
+            deadZone: deadZone,
+            intensity: intensity,
+            warningOnsetDelay: warningOnsetDelay,
+            detectionMode: detectionMode
+        )
+        settingsProfiles.append(profile)
+        currentSettingsProfileID = profile.id
+        saveSettingsProfiles()
+        return profile
+    }
+
     // MARK: - Camera Hot-Plug
 
     private func handleCameraConnected(_ device: AVCaptureDevice) {
@@ -782,21 +868,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     func saveSettings() {
         let defaults = UserDefaults.standard
-        defaults.set(intensity, forKey: SettingsKeys.intensity)
-        defaults.set(deadZone, forKey: SettingsKeys.deadZone)
         defaults.set(useCompatibilityMode, forKey: SettingsKeys.useCompatibilityMode)
         defaults.set(blurWhenAway, forKey: SettingsKeys.blurWhenAway)
         defaults.set(showInDock, forKey: SettingsKeys.showInDock)
         defaults.set(pauseOnTheGo, forKey: SettingsKeys.pauseOnTheGo)
-        defaults.set(detectionMode.rawValue, forKey: SettingsKeys.detectionMode)
-        defaults.set(warningMode.rawValue, forKey: SettingsKeys.warningMode)
-        defaults.set(warningOnsetDelay, forKey: SettingsKeys.warningOnsetDelay)
         defaults.set(toggleShortcutEnabled, forKey: SettingsKeys.toggleShortcutEnabled)
         defaults.set(Int(toggleShortcut.keyCode), forKey: SettingsKeys.toggleShortcutKeyCode)
         defaults.set(Int(toggleShortcut.modifiers.rawValue), forKey: SettingsKeys.toggleShortcutModifiers)
-        if let colorData = try? NSKeyedArchiver.archivedData(withRootObject: warningColor, requiringSecureCoding: false) {
-            defaults.set(colorData, forKey: SettingsKeys.warningColor)
-        }
         if let cameraID = selectedCameraID {
             defaults.set(cameraID, forKey: SettingsKeys.lastCameraID)
         }
@@ -805,25 +883,47 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
            let data = try? JSONEncoder().encode(airPodsCalibration) {
             defaults.set(data, forKey: SettingsKeys.airPodsCalibration)
         }
+        if let profileID = currentSettingsProfileID {
+            defaults.set(profileID, forKey: SettingsKeys.currentSettingsProfileID)
+        }
     }
 
     func loadSettings() {
         let defaults = UserDefaults.standard
+        let legacyIntensity = doubleOrDefault(forKey: SettingsKeys.intensity, defaultValue: defaultIntensity)
+        let legacyDeadZone = doubleOrDefault(forKey: SettingsKeys.deadZone, defaultValue: defaultDeadZone)
+        var legacyWarningMode = warningMode
+        var legacyWarningColor = warningColor
+        var legacyWarningOnsetDelay = warningOnsetDelay
+        var legacyDetectionMode = detectionMode
 
-        if defaults.object(forKey: SettingsKeys.intensity) != nil {
-            intensity = defaults.double(forKey: SettingsKeys.intensity)
+        if let modeString = defaults.string(forKey: SettingsKeys.warningMode),
+           let mode = WarningMode(rawValue: modeString) {
+            legacyWarningMode = mode
         }
-        if defaults.object(forKey: SettingsKeys.deadZone) != nil {
-            deadZone = defaults.double(forKey: SettingsKeys.deadZone)
+        if let colorData = defaults.data(forKey: SettingsKeys.warningColor),
+           let color = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NSColor.self, from: colorData) {
+            legacyWarningColor = color
         }
+        legacyWarningOnsetDelay = doubleOrDefault(forKey: SettingsKeys.warningOnsetDelay, defaultValue: defaultWarningOnsetDelay)
+        if let modeString = defaults.string(forKey: SettingsKeys.detectionMode),
+           let mode = DetectionMode(rawValue: modeString) {
+            legacyDetectionMode = mode
+        }
+
+        loadSettingsProfiles(
+            legacyIntensity: legacyIntensity,
+            legacyDeadZone: legacyDeadZone,
+            legacyWarningMode: legacyWarningMode,
+            legacyWarningColor: legacyWarningColor,
+            legacyWarningOnsetDelay: legacyWarningOnsetDelay,
+            legacyDetectionMode: legacyDetectionMode
+        )
+
         useCompatibilityMode = defaults.bool(forKey: SettingsKeys.useCompatibilityMode)
         blurWhenAway = defaults.bool(forKey: SettingsKeys.blurWhenAway)
         showInDock = defaults.bool(forKey: SettingsKeys.showInDock)
         pauseOnTheGo = defaults.bool(forKey: SettingsKeys.pauseOnTheGo)
-        if let modeString = defaults.string(forKey: SettingsKeys.detectionMode),
-           let mode = DetectionMode(rawValue: modeString) {
-            detectionMode = mode
-        }
         cameraDetector.selectedCameraID = defaults.string(forKey: SettingsKeys.lastCameraID)
         if let sourceString = defaults.string(forKey: SettingsKeys.trackingSource),
            let source = TrackingSource(rawValue: sourceString) {
@@ -833,17 +933,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
            let calibration = try? JSONDecoder().decode(AirPodsCalibrationData.self, from: data) {
             airPodsCalibration = calibration
         }
-        if let modeString = defaults.string(forKey: SettingsKeys.warningMode),
-           let mode = WarningMode(rawValue: modeString) {
-            warningMode = mode
-        }
-        if let colorData = defaults.data(forKey: SettingsKeys.warningColor),
-           let color = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NSColor.self, from: colorData) {
-            warningColor = color
-        }
-        if defaults.object(forKey: SettingsKeys.warningOnsetDelay) != nil {
-            warningOnsetDelay = defaults.double(forKey: SettingsKeys.warningOnsetDelay)
-        }
         if defaults.object(forKey: SettingsKeys.toggleShortcutEnabled) != nil {
             toggleShortcutEnabled = defaults.bool(forKey: SettingsKeys.toggleShortcutEnabled)
         }
@@ -852,6 +941,60 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             let modifiers = NSEvent.ModifierFlags(rawValue: UInt(defaults.integer(forKey: SettingsKeys.toggleShortcutModifiers)))
             toggleShortcut = KeyboardShortcut(keyCode: keyCode, modifiers: modifiers)
         }
+    }
+
+    private func saveSettingsProfiles() {
+        let defaults = UserDefaults.standard
+        if let data = try? JSONEncoder().encode(settingsProfiles) {
+            defaults.set(data, forKey: SettingsKeys.settingsProfiles)
+        }
+        if let profileID = currentSettingsProfileID {
+            defaults.set(profileID, forKey: SettingsKeys.currentSettingsProfileID)
+        }
+    }
+
+    private func loadSettingsProfiles(
+        legacyIntensity: Double,
+        legacyDeadZone: Double,
+        legacyWarningMode: WarningMode,
+        legacyWarningColor: NSColor,
+        legacyWarningOnsetDelay: Double,
+        legacyDetectionMode: DetectionMode
+    ) {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: SettingsKeys.settingsProfiles),
+           let profiles = try? JSONDecoder().decode([SettingsProfile].self, from: data),
+           !profiles.isEmpty {
+            settingsProfiles = profiles
+            let savedID = defaults.string(forKey: SettingsKeys.currentSettingsProfileID)
+            let selectedProfile = profiles.first(where: { $0.id == savedID }) ?? profiles.first
+            currentSettingsProfileID = selectedProfile?.id
+            if let selectedProfile = selectedProfile {
+                applySettingsProfile(selectedProfile)
+            }
+            return
+        }
+
+        let defaultProfile = SettingsProfile(
+            id: UUID().uuidString,
+            name: "Default",
+            warningMode: legacyWarningMode,
+            warningColorData: SettingsProfile.encodedColorData(from: legacyWarningColor),
+            deadZone: legacyDeadZone,
+            intensity: legacyIntensity,
+            warningOnsetDelay: legacyWarningOnsetDelay,
+            detectionMode: legacyDetectionMode
+        )
+        settingsProfiles = [defaultProfile]
+        currentSettingsProfileID = defaultProfile.id
+        applySettingsProfile(defaultProfile)
+        saveSettingsProfiles()
+    }
+
+    private func doubleOrDefault(forKey key: String, defaultValue: Double) -> Double {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: key) != nil else { return defaultValue }
+        return defaults.double(forKey: key)
     }
 
     func saveProfile(forKey key: String, data: ProfileData) {
