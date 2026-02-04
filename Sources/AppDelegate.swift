@@ -37,14 +37,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Warning overlay (alternative to blur)
     var warningOverlayManager = WarningOverlayManager()
-    var warningMode: WarningMode = .blur
-    var warningColor: NSColor = WarningDefaults.color
-    var settingsProfiles: [SettingsProfile] = []
-    var currentSettingsProfileID: String?
-    var isApplyingSettingsProfile = false
-    private let defaultIntensity: Double = 1.0
-    private let defaultDeadZone: Double = 0.03
-    private let defaultWarningOnsetDelay: Double = 0.0
+    let settingsProfileManager = SettingsProfileManager()
 
     // MARK: - Posture Detectors
 
@@ -84,10 +77,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // Settings
-    var intensity: CGFloat = 1.0 {
-        didSet { postureConfig.intensity = intensity }
-    }
-    var deadZone: CGFloat = 0.03
     var useCompatibilityMode = false
     var blurWhenAway = false {
         didSet {
@@ -99,7 +88,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
     var showInDock = false
     var pauseOnTheGo = false
-    var detectionMode: DetectionMode = .balanced
     var settingsWindowController = SettingsWindowController()
     var analyticsWindowController: AnalyticsWindowController?
     var onboardingWindowController: OnboardingWindowController?
@@ -129,18 +117,41 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         set { monitoringState.postureWarningIntensity = newValue }
     }
 
-    // Blur onset delay
-    var warningOnsetDelay: Double = 0.0 {
-        didSet { postureConfig.warningOnsetDelay = warningOnsetDelay }
-    }
-
     // Global keyboard shortcut
     var toggleShortcutEnabled = true
     var toggleShortcut = KeyboardShortcut.defaultShortcut
 
     // Frame throttling
     var frameInterval: TimeInterval {
-        isCurrentlySlouching ? 0.1 : (1.0 / detectionMode.frameRate)
+        isCurrentlySlouching ? 0.1 : (1.0 / activeDetectionMode.frameRate)
+    }
+
+    var activeSettingsProfile: SettingsProfile? {
+        settingsProfileManager.activeProfile
+    }
+
+    var activeWarningMode: WarningMode {
+        activeSettingsProfile?.warningMode ?? .blur
+    }
+
+    var activeWarningColor: NSColor {
+        activeSettingsProfile?.warningColor ?? WarningDefaults.color
+    }
+
+    var activeDeadZone: CGFloat {
+        CGFloat(activeSettingsProfile?.deadZone ?? 0.03)
+    }
+
+    var activeIntensity: CGFloat {
+        CGFloat(activeSettingsProfile?.intensity ?? 1.0)
+    }
+
+    var activeWarningOnsetDelay: Double {
+        activeSettingsProfile?.warningOnsetDelay ?? 0.0
+    }
+
+    var activeDetectionMode: DetectionMode {
+        activeSettingsProfile?.detectionMode ?? .balanced
     }
 
     var setupComplete = false
@@ -164,6 +175,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         if !newState.isActive {
             targetBlurRadius = 0
             postureWarningIntensity = 0
+        }
+        if newState == .monitoring {
+            activeDetector.updateParameters(intensity: activeIntensity, deadZone: activeDeadZone)
         }
         syncUIToState()
     }
@@ -243,9 +257,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         setupMenuBar()
         setupOverlayWindows()
 
-        if warningMode.usesWarningOverlay {
-            warningOverlayManager.mode = warningMode
-            warningOverlayManager.warningColor = warningColor
+        if activeWarningMode.usesWarningOverlay {
+            warningOverlayManager.mode = activeWarningMode
+            warningOverlayManager.warningColor = activeWarningColor
             warningOverlayManager.setupOverlayWindows()
         }
 
@@ -268,7 +282,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupDetectors() {
         // Configure camera detector
         cameraDetector.blurWhenAway = blurWhenAway
-        cameraDetector.baseFrameInterval = 1.0 / detectionMode.frameRate
+        cameraDetector.baseFrameInterval = 1.0 / activeDetectionMode.frameRate
 
         cameraDetector.onPostureReading = { [weak self] reading in
             self?.handlePostureReading(reading)
@@ -674,12 +688,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // For AirPods, check if they're actually in ears before monitoring
         if trackingSource == .airpods && !activeDetector.isConnected {
             os_log(.info, log: log, "AirPods not in ears - pausing instead of monitoring")
-            activeDetector.beginMonitoring(with: calibration, intensity: intensity, deadZone: deadZone)
+            activeDetector.beginMonitoring(with: calibration, intensity: activeIntensity, deadZone: activeDeadZone)
             state = .paused(.airPodsRemoved)
             return
         }
 
-        activeDetector.beginMonitoring(with: calibration, intensity: intensity, deadZone: deadZone)
+        activeDetector.beginMonitoring(with: calibration, intensity: activeIntensity, deadZone: activeDeadZone)
         state = .monitoring
     }
 
@@ -696,87 +710,22 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applyDetectionMode() {
-        cameraDetector.baseFrameInterval = 1.0 / detectionMode.frameRate
+        cameraDetector.baseFrameInterval = 1.0 / activeDetectionMode.frameRate
     }
-
-    func applySettingsProfile(_ profile: SettingsProfile) {
-        isApplyingSettingsProfile = true
-        defer { isApplyingSettingsProfile = false }
-        warningMode = profile.warningMode
-        warningColor = profile.warningColor
-        deadZone = profile.deadZone
-        intensity = profile.intensity
-        warningOnsetDelay = profile.warningOnsetDelay
-        detectionMode = profile.detectionMode
-        postureConfig.intensity = intensity
-        postureConfig.warningOnsetDelay = warningOnsetDelay
-        activeDetector.updateParameters(intensity: intensity, deadZone: deadZone)
+    func applyActiveSettingsProfile() {
+        guard let profile = activeSettingsProfile else { return }
+        postureConfig.intensity = activeIntensity
+        postureConfig.warningOnsetDelay = activeWarningOnsetDelay
+        activeDetector.updateParameters(intensity: activeIntensity, deadZone: activeDeadZone)
         if setupComplete {
-            switchWarningMode(to: warningMode)
-            updateWarningColor(warningColor)
+            switchWarningMode(to: profile.warningMode)
+            updateWarningColor(profile.warningColor)
         }
         applyDetectionMode()
     }
 
-    func updateSettingsProfile(
-        warningMode: WarningMode? = nil,
-        warningColor: NSColor? = nil,
-        deadZone: Double? = nil,
-        intensity: Double? = nil,
-        warningOnsetDelay: Double? = nil,
-        detectionMode: DetectionMode? = nil
-    ) {
-        guard !isApplyingSettingsProfile else { return }
-        guard let profileID = currentSettingsProfileID,
-              let index = settingsProfiles.firstIndex(where: { $0.id == profileID }) else {
-            return
-        }
-        var profile = settingsProfiles[index]
-        if let warningMode = warningMode {
-            profile.warningMode = warningMode
-        }
-        if let warningColor = warningColor {
-            profile.warningColorData = SettingsProfile.encodedColorData(from: warningColor)
-        }
-        if let deadZone = deadZone {
-            profile.deadZone = deadZone
-        }
-        if let intensity = intensity {
-            profile.intensity = intensity
-        }
-        if let warningOnsetDelay = warningOnsetDelay {
-            profile.warningOnsetDelay = warningOnsetDelay
-        }
-        if let detectionMode = detectionMode {
-            profile.detectionMode = detectionMode
-        }
-        settingsProfiles[index] = profile
-        saveSettingsProfiles()
-    }
-
-    func selectSettingsProfile(id: String) {
-        guard let profile = settingsProfiles.first(where: { $0.id == id }) else { return }
-        currentSettingsProfileID = id
-        applySettingsProfile(profile)
-        saveSettings()
-        saveSettingsProfiles()
-    }
-
-    func createSettingsProfile(named name: String) -> SettingsProfile {
-        let profile = SettingsProfile(
-            id: UUID().uuidString,
-            name: name,
-            warningMode: warningMode,
-            warningColorData: SettingsProfile.encodedColorData(from: warningColor),
-            deadZone: deadZone,
-            intensity: intensity,
-            warningOnsetDelay: warningOnsetDelay,
-            detectionMode: detectionMode
-        )
-        settingsProfiles.append(profile)
-        currentSettingsProfileID = profile.id
-        saveSettingsProfiles()
-        return profile
+    var hasSettingsProfiles: Bool {
+        settingsProfileManager.hasProfiles
     }
 
     // MARK: - Camera Hot-Plug
@@ -883,42 +832,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
            let data = try? JSONEncoder().encode(airPodsCalibration) {
             defaults.set(data, forKey: SettingsKeys.airPodsCalibration)
         }
-        if let profileID = currentSettingsProfileID {
-            defaults.set(profileID, forKey: SettingsKeys.currentSettingsProfileID)
-        }
     }
 
     func loadSettings() {
         let defaults = UserDefaults.standard
-        let legacyIntensity = doubleOrDefault(forKey: SettingsKeys.intensity, defaultValue: defaultIntensity)
-        let legacyDeadZone = doubleOrDefault(forKey: SettingsKeys.deadZone, defaultValue: defaultDeadZone)
-        var legacyWarningMode = warningMode
-        var legacyWarningColor = warningColor
-        var legacyWarningOnsetDelay = warningOnsetDelay
-        var legacyDetectionMode = detectionMode
-
-        if let modeString = defaults.string(forKey: SettingsKeys.warningMode),
-           let mode = WarningMode(rawValue: modeString) {
-            legacyWarningMode = mode
-        }
-        if let colorData = defaults.data(forKey: SettingsKeys.warningColor),
-           let color = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NSColor.self, from: colorData) {
-            legacyWarningColor = color
-        }
-        legacyWarningOnsetDelay = doubleOrDefault(forKey: SettingsKeys.warningOnsetDelay, defaultValue: defaultWarningOnsetDelay)
-        if let modeString = defaults.string(forKey: SettingsKeys.detectionMode),
-           let mode = DetectionMode(rawValue: modeString) {
-            legacyDetectionMode = mode
-        }
-
-        loadSettingsProfiles(
-            legacyIntensity: legacyIntensity,
-            legacyDeadZone: legacyDeadZone,
-            legacyWarningMode: legacyWarningMode,
-            legacyWarningColor: legacyWarningColor,
-            legacyWarningOnsetDelay: legacyWarningOnsetDelay,
-            legacyDetectionMode: legacyDetectionMode
-        )
+        settingsProfileManager.loadProfiles()
+        applyActiveSettingsProfile()
 
         useCompatibilityMode = defaults.bool(forKey: SettingsKeys.useCompatibilityMode)
         blurWhenAway = defaults.bool(forKey: SettingsKeys.blurWhenAway)
@@ -941,60 +860,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             let modifiers = NSEvent.ModifierFlags(rawValue: UInt(defaults.integer(forKey: SettingsKeys.toggleShortcutModifiers)))
             toggleShortcut = KeyboardShortcut(keyCode: keyCode, modifiers: modifiers)
         }
-    }
-
-    private func saveSettingsProfiles() {
-        let defaults = UserDefaults.standard
-        if let data = try? JSONEncoder().encode(settingsProfiles) {
-            defaults.set(data, forKey: SettingsKeys.settingsProfiles)
-        }
-        if let profileID = currentSettingsProfileID {
-            defaults.set(profileID, forKey: SettingsKeys.currentSettingsProfileID)
-        }
-    }
-
-    private func loadSettingsProfiles(
-        legacyIntensity: Double,
-        legacyDeadZone: Double,
-        legacyWarningMode: WarningMode,
-        legacyWarningColor: NSColor,
-        legacyWarningOnsetDelay: Double,
-        legacyDetectionMode: DetectionMode
-    ) {
-        let defaults = UserDefaults.standard
-        if let data = defaults.data(forKey: SettingsKeys.settingsProfiles),
-           let profiles = try? JSONDecoder().decode([SettingsProfile].self, from: data),
-           !profiles.isEmpty {
-            settingsProfiles = profiles
-            let savedID = defaults.string(forKey: SettingsKeys.currentSettingsProfileID)
-            let selectedProfile = profiles.first(where: { $0.id == savedID }) ?? profiles.first
-            currentSettingsProfileID = selectedProfile?.id
-            if let selectedProfile = selectedProfile {
-                applySettingsProfile(selectedProfile)
-            }
-            return
-        }
-
-        let defaultProfile = SettingsProfile(
-            id: UUID().uuidString,
-            name: "Default",
-            warningMode: legacyWarningMode,
-            warningColorData: SettingsProfile.encodedColorData(from: legacyWarningColor),
-            deadZone: legacyDeadZone,
-            intensity: legacyIntensity,
-            warningOnsetDelay: legacyWarningOnsetDelay,
-            detectionMode: legacyDetectionMode
-        )
-        settingsProfiles = [defaultProfile]
-        currentSettingsProfileID = defaultProfile.id
-        applySettingsProfile(defaultProfile)
-        saveSettingsProfiles()
-    }
-
-    private func doubleOrDefault(forKey key: String, defaultValue: Double) -> Double {
-        let defaults = UserDefaults.standard
-        guard defaults.object(forKey: key) != nil else { return defaultValue }
-        return defaults.double(forKey: key)
     }
 
     func saveProfile(forKey key: String, data: ProfileData) {
@@ -1093,7 +958,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         blurViews.removeAll()
         setupOverlayWindows()
 
-        if warningMode.usesWarningOverlay {
+        if activeWarningMode.usesWarningOverlay {
             warningOverlayManager.rebuildOverlayWindows()
         }
     }
@@ -1136,23 +1001,21 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         warningOverlayManager.windows.removeAll()
         warningOverlayManager.overlayViews.removeAll()
 
-        warningMode = newMode
-        if warningMode.usesWarningOverlay {
-            warningOverlayManager.mode = warningMode
-            warningOverlayManager.warningColor = warningColor
+        if newMode.usesWarningOverlay {
+            warningOverlayManager.mode = newMode
+            warningOverlayManager.warningColor = activeWarningColor
             warningOverlayManager.setupOverlayWindows()
         }
     }
 
     func updateWarningColor(_ color: NSColor) {
-        warningColor = color
         warningOverlayManager.updateColor(color)
     }
 
     func updateBlur() {
         let privacyBlurIntensity: CGFloat = isCurrentlyAway ? 1.0 : 0.0
 
-        switch warningMode {
+        switch activeWarningMode {
         case .blur:
             let combinedIntensity = max(privacyBlurIntensity, postureWarningIntensity)
             targetBlurRadius = Int32(combinedIntensity * 64)

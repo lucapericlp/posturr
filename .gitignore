@@ -35,6 +35,9 @@ DerivedData/
 *.tmp
 *.temp
 
+# Mock UI screenshots
+assets/settings_profile_mock.png
+
 # Claude Code
 .claude/
 

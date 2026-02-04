@@ -303,34 +303,50 @@ struct SettingsView: View {
         let cameras = appDelegate.cameraDetector.getAvailableCameras()
         let cameraList = cameras.map { (id: $0.uniqueID, name: $0.localizedName) }
 
-        _intensity = State(initialValue: appDelegate.intensity)
-        _deadZone = State(initialValue: appDelegate.deadZone)
-        _intensitySlider = State(initialValue: Double(intensityValues.firstIndex(of: appDelegate.intensity) ?? 2))
-        _deadZoneSlider = State(initialValue: Double(deadZoneValues.firstIndex(of: appDelegate.deadZone) ?? 2))
+        let profileIntensity = appDelegate.activeSettingsProfile?.intensity ?? 1.0
+        let profileDeadZone = appDelegate.activeSettingsProfile?.deadZone ?? 0.03
+        let profileWarningMode = appDelegate.activeSettingsProfile?.warningMode ?? .blur
+        let profileWarningColor = appDelegate.activeSettingsProfile?.warningColor ?? WarningDefaults.color
+        let profileWarningOnsetDelay = appDelegate.activeSettingsProfile?.warningOnsetDelay ?? 0.0
+        let profileDetectionMode = appDelegate.activeSettingsProfile?.detectionMode ?? .balanced
+
+        _intensity = State(initialValue: profileIntensity)
+        _deadZone = State(initialValue: profileDeadZone)
+        _intensitySlider = State(initialValue: Double(intensityValues.firstIndex(of: profileIntensity) ?? 2))
+        _deadZoneSlider = State(initialValue: Double(deadZoneValues.firstIndex(of: profileDeadZone) ?? 2))
         _blurWhenAway = State(initialValue: appDelegate.blurWhenAway)
         _showInDock = State(initialValue: appDelegate.showInDock)
         _pauseOnTheGo = State(initialValue: appDelegate.pauseOnTheGo)
         _useCompatibilityMode = State(initialValue: appDelegate.useCompatibilityMode)
         _selectedCameraID = State(initialValue: appDelegate.selectedCameraID ?? cameras.first?.uniqueID ?? "")
         _availableCameras = State(initialValue: cameraList)
-        _warningMode = State(initialValue: appDelegate.warningMode)
-        _warningColor = State(initialValue: Color(appDelegate.warningColor))
-        _warningOnsetDelay = State(initialValue: appDelegate.warningOnsetDelay)
+        _warningMode = State(initialValue: profileWarningMode)
+        _warningColor = State(initialValue: Color(profileWarningColor))
+        _warningOnsetDelay = State(initialValue: profileWarningOnsetDelay)
         _launchAtLogin = State(initialValue: SMAppService.mainApp.status == .enabled)
         _toggleShortcutEnabled = State(initialValue: appDelegate.toggleShortcutEnabled)
         _toggleShortcut = State(initialValue: appDelegate.toggleShortcut)
-        _detectionModeSlider = State(initialValue: Double(detectionModes.firstIndex(of: appDelegate.detectionMode) ?? 0))
+        _detectionModeSlider = State(initialValue: Double(detectionModes.firstIndex(of: profileDetectionMode) ?? 0))
         _trackingSource = State(initialValue: appDelegate.trackingSource)
         _airPodsAvailable = State(initialValue: appDelegate.airPodsDetector.isAvailable)
         let profiles: [SettingsProfile]
         let initialProfileID: String
-        if appDelegate.settingsProfiles.isEmpty {
-            let defaultProfile = appDelegate.createSettingsProfile(named: "Default")
-            profiles = appDelegate.settingsProfiles
-            initialProfileID = defaultProfile.id
+        profiles = appDelegate.settingsProfileManager.settingsProfiles
+        if profiles.isEmpty {
+            let fallbackProfile = SettingsProfile(
+                id: UUID().uuidString,
+                name: "Default",
+                warningMode: profileWarningMode,
+                warningColorData: SettingsProfile.encodedColorData(from: profileWarningColor),
+                deadZone: profileDeadZone,
+                intensity: profileIntensity,
+                warningOnsetDelay: profileWarningOnsetDelay,
+                detectionMode: profileDetectionMode
+            )
+            profiles = [fallbackProfile]
+            initialProfileID = fallbackProfile.id
         } else {
-            profiles = appDelegate.settingsProfiles
-            initialProfileID = appDelegate.currentSettingsProfileID ?? profiles.first?.id ?? ""
+            initialProfileID = appDelegate.settingsProfileManager.currentSettingsProfileID ?? profiles.first?.id ?? ""
         }
         _settingsProfiles = State(initialValue: profiles)
         _selectedSettingsProfileID = State(initialValue: initialProfileID)
@@ -514,10 +530,9 @@ struct SettingsView: View {
                     CompactWarningStylePicker(selection: $warningMode)
                         .frame(maxWidth: .infinity)
                         .onChange(of: warningMode) { newValue in
-                            if newValue != appDelegate.warningMode {
+                            if newValue != appDelegate.activeWarningMode {
+                                appDelegate.settingsProfileManager.updateActiveProfile(warningMode: newValue)
                                 appDelegate.switchWarningMode(to: newValue)
-                                appDelegate.updateSettingsProfile(warningMode: newValue)
-                                appDelegate.saveSettings()
                             }
                         }
 
@@ -527,9 +542,8 @@ struct SettingsView: View {
                         .frame(width: 28, height: 22)
                         .onChange(of: warningColor) { newValue in
                             let nsColor = NSColor(newValue)
+                            appDelegate.settingsProfileManager.updateActiveProfile(warningColor: nsColor)
                             appDelegate.updateWarningColor(nsColor)
-                            appDelegate.updateSettingsProfile(warningColor: nsColor)
-                            appDelegate.saveSettings()
                         }
                 }
                 .frame(height: 26)
@@ -551,10 +565,8 @@ struct SettingsView: View {
                 .onChange(of: deadZoneSlider) { newValue in
                     let index = Int(newValue)
                     deadZone = deadZoneValues[index]
-                    appDelegate.deadZone = deadZone
-                    appDelegate.updateSettingsProfile(deadZone: deadZone)
+                    appDelegate.settingsProfileManager.updateActiveProfile(deadZone: deadZone)
                     updateDetectorParameters()
-                    appDelegate.saveSettings()
                 }
 
                 CompactSlider(
@@ -568,10 +580,8 @@ struct SettingsView: View {
                 .onChange(of: intensitySlider) { newValue in
                     let index = Int(newValue)
                     intensity = intensityValues[index]
-                    appDelegate.intensity = intensity
-                    appDelegate.updateSettingsProfile(intensity: intensity)
+                    appDelegate.settingsProfileManager.updateActiveProfile(intensity: intensity)
                     updateDetectorParameters()
-                    appDelegate.saveSettings()
                 }
 
                 CompactSlider(
@@ -583,9 +593,8 @@ struct SettingsView: View {
                     valueLabel: "\(Int(warningOnsetDelay))s"
                 )
                 .onChange(of: warningOnsetDelay) { newValue in
-                    appDelegate.warningOnsetDelay = newValue
-                    appDelegate.updateSettingsProfile(warningOnsetDelay: newValue)
-                    appDelegate.saveSettings()
+                    appDelegate.settingsProfileManager.updateActiveProfile(warningOnsetDelay: newValue)
+                    appDelegate.applyActiveSettingsProfile()
                 }
 
                 CompactSlider(
@@ -598,9 +607,7 @@ struct SettingsView: View {
                 )
                 .onChange(of: detectionModeSlider) { newValue in
                     let index = Int(newValue)
-                    appDelegate.detectionMode = detectionModes[index]
-                    appDelegate.updateSettingsProfile(detectionMode: detectionModes[index])
-                    appDelegate.saveSettings()
+                    appDelegate.settingsProfileManager.updateActiveProfile(detectionMode: detectionModes[index])
                     appDelegate.applyDetectionMode()
                 }
             }
@@ -722,8 +729,16 @@ struct SettingsView: View {
             Button("Create") {
                 let trimmedName = newProfileName.trimmingCharacters(in: .whitespacesAndNewlines)
                 let profileName = trimmedName.isEmpty ? nextDefaultProfileName() : trimmedName
-                let profile = appDelegate.createSettingsProfile(named: profileName)
-                settingsProfiles = appDelegate.settingsProfiles
+                let profile = appDelegate.settingsProfileManager.createProfile(
+                    named: profileName,
+                    warningMode: appDelegate.activeWarningMode,
+                    warningColor: appDelegate.activeWarningColor,
+                    deadZone: appDelegate.activeSettingsProfile?.deadZone ?? 0.03,
+                    intensity: appDelegate.activeSettingsProfile?.intensity ?? 1.0,
+                    warningOnsetDelay: appDelegate.activeSettingsProfile?.warningOnsetDelay ?? 0.0,
+                    detectionMode: appDelegate.activeSettingsProfile?.detectionMode ?? .balanced
+                )
+                settingsProfiles = appDelegate.settingsProfileManager.settingsProfiles
                 selectedSettingsProfileID = profile.id
                 lastSelectedSettingsProfileID = profile.id
                 syncProfileSettings()
@@ -734,18 +749,20 @@ struct SettingsView: View {
     }
 
     private func syncProfileSettings() {
-        intensity = appDelegate.intensity
-        deadZone = appDelegate.deadZone
-        intensitySlider = Double(intensityValues.firstIndex(of: appDelegate.intensity) ?? 2)
-        deadZoneSlider = Double(deadZoneValues.firstIndex(of: appDelegate.deadZone) ?? 2)
-        warningMode = appDelegate.warningMode
-        warningColor = Color(appDelegate.warningColor)
-        warningOnsetDelay = appDelegate.warningOnsetDelay
-        detectionModeSlider = Double(detectionModes.firstIndex(of: appDelegate.detectionMode) ?? 0)
+        intensity = appDelegate.activeSettingsProfile?.intensity ?? 1.0
+        deadZone = appDelegate.activeSettingsProfile?.deadZone ?? 0.03
+        intensitySlider = Double(intensityValues.firstIndex(of: intensity) ?? 2)
+        deadZoneSlider = Double(deadZoneValues.firstIndex(of: deadZone) ?? 2)
+        warningMode = appDelegate.activeWarningMode
+        warningColor = Color(appDelegate.activeWarningColor)
+        warningOnsetDelay = appDelegate.activeWarningOnsetDelay
+        detectionModeSlider = Double(detectionModes.firstIndex(of: appDelegate.activeDetectionMode) ?? 0)
     }
 
     private func updateDetectorParameters() {
-        appDelegate.activeDetector.updateParameters(intensity: appDelegate.intensity, deadZone: appDelegate.deadZone)
+        appDelegate.postureConfig.intensity = appDelegate.activeIntensity
+        appDelegate.postureConfig.warningOnsetDelay = appDelegate.activeWarningOnsetDelay
+        appDelegate.activeDetector.updateParameters(intensity: appDelegate.activeIntensity, deadZone: appDelegate.activeDeadZone)
     }
 
     private func handleProfileSelectionChange(_ newValue: String) {
@@ -754,11 +771,11 @@ struct SettingsView: View {
         isApplyingProfileSelection = true
         defer { isApplyingProfileSelection = false }
         let previousSelection = lastSelectedSettingsProfileID
-        appDelegate.selectSettingsProfile(id: newValue)
-        settingsProfiles = appDelegate.settingsProfiles
-        if let currentID = appDelegate.currentSettingsProfileID {
-            if currentID != newValue { selectedSettingsProfileID = currentID }
-            lastSelectedSettingsProfileID = currentID
+        if let profile = appDelegate.settingsProfileManager.selectProfile(id: newValue) {
+            appDelegate.applyActiveSettingsProfile()
+            settingsProfiles = appDelegate.settingsProfileManager.settingsProfiles
+            selectedSettingsProfileID = profile.id
+            lastSelectedSettingsProfileID = profile.id
         } else {
             selectedSettingsProfileID = previousSelection
         }
