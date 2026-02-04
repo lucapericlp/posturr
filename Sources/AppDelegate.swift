@@ -177,7 +177,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             postureWarningIntensity = 0
         }
         if newState == .monitoring {
-            activeDetector.updateParameters(intensity: activeIntensity, deadZone: activeDeadZone)
+            applyActiveSettingsProfile()
         }
         syncUIToState()
     }
@@ -713,20 +713,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         cameraDetector.baseFrameInterval = 1.0 / activeDetectionMode.frameRate
     }
     func applyActiveSettingsProfile() {
-        guard let profile = activeSettingsProfile else { return }
         postureConfig.intensity = activeIntensity
         postureConfig.warningOnsetDelay = activeWarningOnsetDelay
         activeDetector.updateParameters(intensity: activeIntensity, deadZone: activeDeadZone)
         if setupComplete {
-            switchWarningMode(to: profile.warningMode)
-            updateWarningColor(profile.warningColor)
+            switchWarningMode(to: activeWarningMode)
+            updateWarningColor(activeWarningColor)
         }
         applyDetectionMode()
     }
 
-    var hasSettingsProfiles: Bool {
-        settingsProfileManager.hasProfiles
-    }
 
     // MARK: - Camera Hot-Plug
 

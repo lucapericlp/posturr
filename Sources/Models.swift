@@ -264,6 +264,7 @@ final class SettingsProfileManager {
     }
 
     func loadProfiles() {
+        guard settingsProfiles.isEmpty else { return }
         let defaults = UserDefaults.standard
         if let data = defaults.data(forKey: SettingsKeys.settingsProfiles),
            let profiles = try? JSONDecoder().decode([SettingsProfile].self, from: data),
@@ -309,7 +310,24 @@ final class SettingsProfileManager {
         settingsProfiles = [defaultProfile]
         currentSettingsProfileID = defaultProfile.id
         saveProfiles()
-        clearLegacyProfileKeys()
+        if defaults.object(forKey: SettingsKeys.intensity) != nil
+            || defaults.object(forKey: SettingsKeys.deadZone) != nil
+            || defaults.object(forKey: SettingsKeys.warningMode) != nil
+            || defaults.object(forKey: SettingsKeys.warningColor) != nil
+            || defaults.object(forKey: SettingsKeys.warningOnsetDelay) != nil
+            || defaults.object(forKey: SettingsKeys.detectionMode) != nil {
+            clearLegacyProfileKeys()
+        }
+    }
+
+    func ensureProfilesLoaded() {
+        if settingsProfiles.isEmpty {
+            loadProfiles()
+        }
+    }
+
+    func profilesSnapshot() -> (profiles: [SettingsProfile], selectedID: String?) {
+        (settingsProfiles, currentSettingsProfileID)
     }
 
     func updateActiveProfile(
